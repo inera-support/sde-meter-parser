@@ -15,6 +15,7 @@ import os
 from parsers import FileProcessor, FileProcessingResult
 from validation import QualityReportGenerator
 from export import EnergyWorxExporter, SummaryTableGenerator
+from visualization import create_load_curve_chart, create_index_chart, get_readings_by_cldn_and_type
 
 # Configuration de la page
 st.set_page_config(
@@ -168,20 +169,6 @@ def upload_section(force_cldn: str, timezone_option: str):
         if st.button("🔄 Traiter les fichiers", type="primary"):
             process_files(uploaded_files, force_cldn, timezone_option)
     
-    # Affichage des fichiers uploadés
-    if uploaded_files:
-        st.subheader("📋 Fichiers sélectionnés")
-        
-        file_info = []
-        for file in uploaded_files:
-            file_info.append({
-                'Nom': file.name,
-                'Taille': f"{file.size / 1024:.1f} KB",
-                'Type': file.name.split('.')[-1].upper()
-            })
-        
-        df_files = pd.DataFrame(file_info)
-        st.dataframe(df_files, use_container_width=True)
 
 def process_files(uploaded_files: List, force_cldn: str, timezone_option: str):
     """Traite les fichiers uploadés"""
@@ -230,9 +217,10 @@ def process_files(uploaded_files: List, force_cldn: str, timezone_option: str):
         quality_generator = QualityReportGenerator()
         quality_report = quality_generator.generate_report(processing_results)
         
-        # Mise à jour de la session
+        # Mise à jour de la session avec les fichiers originaux pour conserver les tailles
         st.session_state.processing_results = processing_results
         st.session_state.quality_report = quality_report
+        st.session_state.uploaded_files_info = {f.name: f.size for f in uploaded_files}
         
         status_text.text("✅ Traitement terminé!")
         progress_bar.empty()
@@ -265,23 +253,70 @@ def display_processing_results(processing_results: List[FileProcessingResult]):
     with col4:
         st.metric("Lectures totales", total_readings)
     
-    # Détail par fichier
+    # Mise à jour du tableau des fichiers avec les résultats
     if processing_results:
-        st.subheader("📋 Détail par fichier")
+        st.subheader("📋 État des fichiers")
         
-        file_details = []
+        # Explication des colonnes
+        with st.expander("ℹ️ Explication des colonnes"):
+            st.markdown("""
+            **Colonnes du tableau :**
+            
+            - **Nom** : Nom du fichier traité
+            - **Taille** : Taille réelle du fichier en KB
+            - **Type** : Extension du fichier (CSV, XML, XLSX, ZIP)
+            - **Statut** : 
+              - ✅ **Succès** : Fichier traité sans erreur critique
+              - ❌ **Échec** : Erreur lors du traitement du fichier
+            - **Nombre de canaux** : Nombre de types de mesures différents dans le fichier
+            - **Mesures temporelles** : Nombre de mesures d'énergie extraites du fichier
+            - **Erreurs** : Nombre d'erreurs critiques détectées (empêchent le traitement)
+            - **Avertissements** : Nombre d'avertissements détectés (n'empêchent pas le traitement)
+            
+            **Types d'erreurs courantes :**
+            - Format de fichier non supporté
+            - Structure XML/CSV invalide
+            - Données manquantes critiques (CLDN, timestamps)
+            - Encodage de fichier non reconnu
+            
+            **Types d'avertissements courants :**
+            - Valeurs manquantes dans certaines colonnes
+            - Timestamps en dehors de la plage attendue
+            - Valeurs d'énergie anormalement élevées ou négatives
+            - Doublons détectés dans les données
+            """)
+        
+        # Créer un dictionnaire pour mapper les résultats par nom de fichier
+        results_by_filename = {result.filename: result for result in processing_results}
+        
+        # Mettre à jour les informations des fichiers
+        updated_file_info = []
         for result in processing_results:
             status = "✅ Succès" if result.success else "❌ Échec"
-            file_details.append({
-                'Fichier': result.filename,
+            
+            # Récupérer la taille réelle du fichier si disponible
+            file_size = st.session_state.get('uploaded_files_info', {}).get(result.filename, 0)
+            if file_size > 0:
+                size_str = f"{file_size / 1024:.1f} KB"
+            else:
+                size_str = f"{len(result.readings) * 0.1:.1f} KB"  # Estimation basée sur les lectures
+            
+            # Compter les types uniques pour ce fichier
+            unique_types = set(r.reading_type for r in result.readings)
+            
+            updated_file_info.append({
+                'Nom': result.filename,
+                'Taille': size_str,
+                'Type': result.filename.split('.')[-1].upper(),
                 'Statut': status,
-                'Lectures': len(result.readings),
+                'Nombre de canaux': len(unique_types),
+                'Mesures temporelles': len(result.readings),
                 'Erreurs': len(result.errors),
                 'Avertissements': len(result.warnings)
             })
         
-        df_details = pd.DataFrame(file_details)
-        st.dataframe(df_details, use_container_width=True)
+        df_updated = pd.DataFrame(updated_file_info)
+        st.dataframe(df_updated, use_container_width=True)
         
         # Affichage des erreurs
         errors_found = any(len(r.errors) > 0 for r in processing_results)
@@ -357,23 +392,25 @@ def summary_section():
         - **Direction/Quadrant** : Direction (Importée/Exportée) ou Quadrant (Q1/Q2/Q3/Q4)
         - **Unité** : Unité de mesure (kWh, kvarh, kVAh, kW)
         - **Statut Validation** : CORRECT, AVERTISSEMENT, ERREUR, INCONNU
+        - **Type de fichier** : Format source des données (CSV BlueLink, XML MAP110 E450, etc.)
+        
+        **Colonnes de comptage :**
+        - **Nombre de canaux** : Nombre de types de mesures différents pour ce compteur (ex: 9 pour E450)
+        - **Mesures temporelles** : Nombre de mesures pour ce type spécifique (ex: 4587 pour A+ Load1)
         
         **Colonnes de complétude :**
-        - **Complet** : Indique si les données couvrent au moins 95% de la période attendue
+        - **Complet** : Indique si les données couvrent exactement 100% de la période attendue
         - **Pourcentage** : Pourcentage de couverture des données (0-100%)
         
         **Calcul de la complétude :**
         1. **Période totale** : De la première à la dernière lecture
         2. **Lectures attendues** : Durée totale ÷ 15 minutes + 1
         3. **Pourcentage** : (Lectures réelles ÷ Lectures attendues) × 100
-        4. **Complet** : True si ≥ 95%, False sinon
+        4. **Complet** : True si = 100%, False sinon
         
-        **Exemple :**
-        - Période : 24h (1440 minutes)
-        - Lectures attendues : 1440 ÷ 15 + 1 = 97 lectures
-        - Lectures réelles : 92
-        - Pourcentage : (92 ÷ 97) × 100 = 94.8%
-        - Complet : False (car < 95%)
+        **Exemple pour compteur E450 :**
+        - **Nombre de canaux** : 9 (A+ import, A- export, Q1, Q2, Q3, Q4, Load1, Load2, Quality)
+        - **Mesures temporelles** : 4587 (pour le canal A+ Load1 sur 15 minutes)
         """)
     
     # Affichage du tableau filtré
@@ -440,7 +477,7 @@ def summary_section():
     # Statistiques du tableau
     st.subheader("📈 Statistiques")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric("Compteurs uniques", len(filtered_df['CLDN'].unique()))
@@ -456,9 +493,114 @@ def summary_section():
         # Explication de la complétude
         if incomplete_count > 0:
             st.caption(f"⚠️ {incomplete_count} registre(s) incomplet(s) détecté(s)")
-            st.caption("Un registre est considéré comme complet s'il couvre ≥95% de la période attendue")
+            st.caption("Un registre est considéré comme complet s'il couvre exactement 100% de la période attendue")
+    
+    with col4:
+        # Calculer le nombre total de canaux uniques
+        total_channels = filtered_df['Nombre de canaux'].sum() if len(filtered_df) > 0 else 0
+        total_measurements = filtered_df['Mesures temporelles'].sum() if len(filtered_df) > 0 else 0
+        st.metric("Canaux total", total_channels)
+        st.caption(f"Mesures temporelles: {total_measurements:,}")
+    
+    # Section de visualisation des courbes de charge
+    st.divider()
+    st.subheader("📈 Visualisation des courbes de charge")
+    
+    if len(filtered_df) > 0:
+        # Sélection du CLDN et du type de lecture
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            selected_cldn = st.selectbox(
+                "Sélectionner un compteur (CLDN)",
+                options=sorted(filtered_df['CLDN'].unique()),
+                key="chart_cldn_select"
+            )
+        
+        with col2:
+            # Filtrer les types de lecture disponibles pour le CLDN sélectionné
+            available_types = filtered_df[
+                filtered_df['CLDN'] == selected_cldn
+            ]['Libellé Original'].unique()
+            
+            selected_reading_type = st.selectbox(
+                "Sélectionner un type de lecture",
+                options=sorted(available_types),
+                key="chart_reading_type_select"
+            )
+        
+        # Récupérer les informations du type sélectionné
+        selected_row = filtered_df[
+            (filtered_df['CLDN'] == selected_cldn) &
+            (filtered_df['Libellé Original'] == selected_reading_type)
+        ].iloc[0]
+        
+        # Récupérer les lectures correspondantes
+        # Utiliser le mapping OBIS du générateur de synthèse pour trouver le reading_type
+        summary_generator = SummaryTableGenerator()
+        readings = get_readings_by_cldn_and_type(
+            st.session_state.processing_results,
+            selected_cldn,
+            selected_reading_type,
+            obis_mapping=summary_generator.obis_mapping
+        )
+        
+        if readings:
+            # Afficher les informations
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Période", f"{selected_row['Date min'][:10]} → {selected_row['Date max'][:10]}")
+            with col2:
+                st.metric("Mesures", f"{len(readings):,}")
+            with col3:
+                st.metric("Complétude", selected_row['Pourcentage'])
+            with col4:
+                st.metric("Unité", selected_row['Unité'])
+            
+            # Options d'affichage
+            col1, col2 = st.columns(2)
+            with col1:
+                show_load_curve = st.checkbox("Afficher la courbe de charge", value=True, key="show_load_curve")
+            with col2:
+                show_index = st.checkbox("Afficher l'évolution de l'index", value=False, key="show_index")
+            
+            # Graphique de courbe de charge
+            if show_load_curve:
+                st.markdown("#### Courbe de charge avec détection des trous")
+                st.caption("🔵 Bleu = Données réelles | 🟠 Orange = Trous < 1 jour | 🔴 Rouge = Trous > 1 jour")
+                
+                chart, availability_chart = create_load_curve_chart(
+                    readings=readings,
+                    title="Courbe de charge",
+                    cldn=selected_cldn,
+                    reading_type=selected_reading_type,
+                    interval_minutes=15
+                )
+                
+                # Afficher le graphique de disponibilité d'abord
+                st.plotly_chart(availability_chart, use_container_width=True)
+                
+                # Puis la courbe de charge détaillée
+                st.plotly_chart(chart, use_container_width=True)
+            
+            # Graphique d'évolution de l'index
+            if show_index:
+                st.markdown("#### Évolution de l'index (cumulatif)")
+                
+                index_chart = create_index_chart(
+                    readings=readings,
+                    title="Évolution de l'index",
+                    cldn=selected_cldn,
+                    reading_type=selected_reading_type
+                )
+                st.plotly_chart(index_chart, use_container_width=True)
+        else:
+            st.warning(f"Aucune lecture trouvée pour {selected_cldn} - {selected_reading_type}")
+    else:
+        st.info("Sélectionnez des données dans le tableau ci-dessus pour afficher les graphiques.")
     
     # Boutons d'export
+    st.divider()
     st.subheader("💾 Export du tableau")
     
     col1, col2 = st.columns(2)

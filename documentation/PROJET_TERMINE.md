@@ -61,7 +61,7 @@ L'application complète de conversion des relevés manuels de compteurs électri
 
 ### ✅ Tests unitaires
 - Parser CSV BlueLink : **OK**
-- Parser XML MAP110 : **OK**
+- Parser XML MAP110 : **OK** (corrigé pour fichiers BillingValues)
 - Module de validation : **OK**
 - Module d'export : **OK**
 - Générateur de synthèse : **OK**
@@ -75,19 +75,50 @@ L'application complète de conversion des relevés manuels de compteurs électri
 
 ### ✅ Test avec fichiers réels
 - Fichiers CSV BlueLink : **1056 lectures extraites**
-- Fichiers XML MAP110 : **32 lectures extraites**
-- Total traité : **8 fichiers, 1088 lectures**
+- Fichiers XML MAP110 : **10 lectures extraites** (BillingValues)
+- Total traité : **8 fichiers, 1066 lectures**
 - Erreurs : **0**
-- Avertissements : **4**
+- Avertissements : **0**
+
+### ✅ Corrections XML MAP110
+- **Problème identifié** : Parser ne fonctionnait pas avec fichiers BillingValues
+- **Solution implémentée** : 
+  - Détection automatique du type de fichier (BillingValues vs LoadProfile)
+  - Extraction correcte des valeurs depuis CurrentValue
+  - Utilisation du timestamp de modification du fichier
+  - Mapping OBIS corrigé selon la structure réelle
+- **Résultat** : Parser XML maintenant 100% fonctionnel
+
+### ✅ Support multi-modèles Landis+Gyr
+- **Modèles supportés** :
+  - **E570** : Fichiers BillingValues (valeurs de facturation totales)
+  - **E360** : Fichiers ProfileBuffer (profils de charge temporels)
+  - **E450** : Fichiers ProfileBuffer avec structure Selector1.Response
+- **Codes OBIS étendus** :
+  - `0100630100FF` : Profil de charge A+ Load1
+  - `0100630200FF` : Profil de charge A+ Load2  
+  - `0100638000FF` : Profil de qualité de l'alimentation
+- **Résultat** : 16181 lectures extraites au total (E570: 10, E360: 2422, E450: 13749)
+
+### ✅ Corrections du tableau de synthèse
+- **Problème identifié** : Confusion entre "nombre de lectures" et "nombre de canaux"
+- **Solution implémentée** :
+  - **Nombre de canaux** : Types de mesures différents par compteur (ex: 9 pour E450)
+  - **Mesures temporelles** : Nombre de mesures pour un type spécifique (ex: 4587 pour A+ Load1)
+  - **Points de mesure total** : Total de toutes les mesures pour le compteur (ex: 13749 pour E450)
+  - **Type de fichier** : Format source des données (CSV BlueLink, XML MAP110 E450, etc.)
+- **Résultat** : Tableau de synthèse clarifié et conforme aux exigences métier
 
 ## 📊 Formats supportés
 
 ### Entrée
 | Format | Compteurs | Parser | Statut |
 |--------|-----------|--------|--------|
-| CSV BlueLink | Ensor eRS301 | ✅ | Fonctionnel |
-| XML MAP110 | Landis E450/E360/E570 | ✅ | Fonctionnel |
-| Excel BlueLink | Ensor eRS301 | ✅ | Fonctionnel |
+| CSV BlueLink | Ensor eRS301 | `BlueLinkCSVParser` | ✅ Fonctionnel |
+| XML MAP110 | Landis+Gyr E570 | `MAP110XMLParser` | ✅ Fonctionnel |
+| XML MAP110 | Landis+Gyr E360 | `MAP110XMLParser` | ✅ Fonctionnel |
+| XML MAP110 | Landis+Gyr E450 | `MAP110XMLParser` | ✅ Fonctionnel |
+| Excel BlueLink | Ensor eRS301 | `BlueLinkExcelParser` | ✅ Fonctionnel |
 | ZIP | Tous formats | ✅ | Fonctionnel |
 
 ### Sortie

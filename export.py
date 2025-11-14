@@ -314,6 +314,24 @@ class SummaryTableGenerator:
                 key = (reading.cldn, reading.reading_type)
                 readings_by_cldn_and_type[key].append(reading)
             
+            # Calculer les statistiques par CLDN
+            # Utiliser channels_count depuis FileProcessingResult si disponible, sinon compter les reading_type uniques
+            cldn_stats = defaultdict(lambda: {'channels': set(), 'total_readings': 0, 'file_info': {}, 'channels_count': None})
+            
+            for (cldn, reading_type), readings in readings_by_cldn_and_type.items():
+                if not readings:
+                    continue
+                
+                cldn_stats[cldn]['channels'].add(reading_type)
+                cldn_stats[cldn]['total_readings'] += len(readings)
+                cldn_stats[cldn]['file_info'] = {
+                    'filename': result.filename,
+                    'file_type': self._detect_file_type_from_filename(result.filename)
+                }
+                # Stocker le channels_count depuis FileProcessingResult (nombre de codes OBIS uniques depuis capture_objects)
+                if result.channels_count is not None:
+                    cldn_stats[cldn]['channels_count'] = result.channels_count
+            
             # Créer une entrée pour chaque combinaison CLDN/type
             for (cldn, reading_type), readings in readings_by_cldn_and_type.items():
                 if not readings:
@@ -340,6 +358,12 @@ class SummaryTableGenerator:
                     "commentaire": "Type de lecture non référencé"
                 })
                 
+                # Obtenir les statistiques du CLDN
+                stats = cldn_stats[cldn]
+                
+                # Utiliser channels_count depuis capture_objects si disponible, sinon fallback sur reading_type uniques
+                channels_count = stats['channels_count'] if stats['channels_count'] is not None else len(stats['channels'])
+                
                 summary_entry = {
                     'CLDN': cldn,
                     'Libellé Original': obis_info['libelle_original'],
@@ -354,13 +378,37 @@ class SummaryTableGenerator:
                     'Date max': date_max.strftime('%Y-%m-%d %H:%M:%S%z'),
                     'Complet': completeness['complete'],
                     'Pourcentage': f"{completeness['percentage']:.1f}%",
-                    'Nombre de lectures': len(readings),
+                    'Nombre de canaux': channels_count,
+                    'Mesures temporelles': len(readings),
+                    'Type de fichier': stats['file_info']['file_type'],
                     'Fichier source': result.filename
                 }
                 
                 summary_data.append(summary_entry)
         
         return summary_data
+    
+    def _detect_file_type_from_filename(self, filename: str) -> str:
+        """Détecte le type de fichier à partir du nom de fichier"""
+        filename_lower = filename.lower()
+        
+        if filename_lower.endswith('.csv'):
+            return 'CSV BlueLink'
+        elif filename_lower.endswith(('.xlsx', '.xls')):
+            return 'Excel BlueLink'
+        elif filename_lower.endswith('.xml'):
+            if 'e570' in filename_lower or 'metervalues' in filename_lower:
+                return 'XML MAP110 E570'
+            elif 'e360' in filename_lower:
+                return 'XML MAP110 E360'
+            elif 'e450' in filename_lower or 'lgz1030767023632' in filename_lower:
+                return 'XML MAP110 E450'
+            else:
+                return 'XML MAP110'
+        elif filename_lower.endswith('.zip'):
+            return 'ZIP'
+        else:
+            return 'Inconnu'
     
     def _calculate_completeness(self, readings: List[Any]) -> Dict[str, Any]:
         """Calcule la complétude des données"""
@@ -385,8 +433,8 @@ class SummaryTableGenerator:
         actual_readings = len(readings)
         percentage = (actual_readings / expected_readings) * 100
         
-        # Considérer comme complet si > 95%
-        complete = percentage >= 95.0
+        # Considérer comme complet si = 100%
+        complete = percentage == 100.0
         
         return {
             'complete': complete,
@@ -404,7 +452,7 @@ class SummaryTableGenerator:
         output = io.StringIO()
         fieldnames = ['CLDN', 'Libellé Original', 'Code OBIS', 'Description Standard', 'Type Énergie', 
                      'Direction/Quadrant', 'Unité', 'Statut Validation', 'Commentaire', 'Date min', 'Date max', 
-                     'Complet', 'Pourcentage', 'Nombre de lectures', 'Fichier source']
+                     'Complet', 'Pourcentage', 'Nombre de canaux', 'Mesures temporelles', 'Type de fichier', 'Fichier source']
         
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
